@@ -206,38 +206,67 @@ describe("solana-swap-2025", () => {
     console.log("Initialize market tx:", tx);
   });
 
-  it("Sets the exchange rate!", async () => {
-    const newPrice = new anchor.BN(1500000); // e.g. 1.5 scaled
+  it("Should set price", async () => {
     const tx = await program.methods
-      .setExchangeRate(newPrice)
+      .setPrice(new anchor.BN(1000000))
       .accounts({
         market: market,
+        tokenMintA: mintA,
+        tokenMintB: mintB,
         authority: initializer.publicKey,
+        systemProgram: anchor.web3.SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        rent: anchor.web3.SYSVAR_RENT_PUBKEY,
       })
       .signers([initializer])
       .rpc();
 
-    console.log("Set Exchange Rate TX:", tx);
-
     const marketAccount = await program.account.marketAccount.fetch(market);
-    expect(marketAccount.price.toString()).to.equal(newPrice.toString());
+    expect(marketAccount.price.eq(new anchor.BN(1000000))).to.be.true;
+    expect(tx).to.not.be.null;
   });
 
-  it("Adds liquidity!", async () => {
-    const tx = await program.methods
-      .addLiquidity(new anchor.BN(500_000_000), true) // amount: 500, addToA: true
-      .accounts({
-        authority: user.publicKey,
-        sourceTokenAccount: userTokenAAccount.address,
-        market: market,
-        vaultA: vaultA,
-        vaultB: vaultB,
-        tokenProgram: TOKEN_PROGRAM_ID,
-      })
-      .signers([user])
-      .rpc();
+  it("Should add liquidity", async () => {
+    const connection = anchor.getProvider().connection;
+    const balanceAuthorityTokenABefore = await connection.getTokenAccountBalance(initializerTokenAAccount.address);
+    const balanceAuthorityTokenBBefore = await connection.getTokenAccountBalance(initializerTokenBAccount.address);
+    console.log("Authority Token A balance before:", balanceAuthorityTokenABefore.value.uiAmount);
+    console.log("Authority Token B balance before:", balanceAuthorityTokenBBefore.value.uiAmount);
+    const amountA = new anchor.BN(100 * Math.pow(10, DECIMALS_MINT_A));
+    const amountB = new anchor.BN(100 * Math.pow(10, DECIMALS_MINT_B));
+    const tx = await program.methods.addLiquidity(
+      amountA,
+      amountB,
+    ).accounts({
+      market: market,
+      tokenMintA: mintA,
+      tokenMintB: mintB,
+      autorityTokenA: initializerTokenAAccount.address,
+      autorityTokenB: initializerTokenBAccount.address,
+      vaultA: vaultA,
+      vaultB: vaultB,
+      authority: initializer.publicKey,
+      systemProgram: anchor.web3.SystemProgram.programId,
+      tokenProgram: TOKEN_PROGRAM_ID,
+    }).signers([initializer]).rpc();
 
-    console.log("Add Liquidity TX:", tx);
+    expect(tx).to.not.be.null;
+
+    const balanceAuthorityTokenAfter = await connection.getTokenAccountBalance(initializerTokenAAccount.address);
+    console.log("Authority Token A balance after:", balanceAuthorityTokenAfter.value.uiAmount);
+    expect(balanceAuthorityTokenAfter.value.uiAmount).to.equal(balanceAuthorityTokenABefore.value.uiAmount - amountA.toNumber() / Math.pow(10, DECIMALS_MINT_A));
+
+    const balanceAuthorityTokenBAfter = await connection.getTokenAccountBalance(initializerTokenBAccount.address);
+    console.log("Authority Token B balance after:", balanceAuthorityTokenBAfter.value.uiAmount);
+    expect(balanceAuthorityTokenBAfter.value.uiAmount).to.equal(balanceAuthorityTokenBBefore.value.uiAmount - amountB.toNumber() / Math.pow(10, DECIMALS_MINT_B));
+
+    const balanceVaultA = await connection.getTokenAccountBalance(vaultA);
+    console.log("Vault A balance after:", balanceVaultA.value.uiAmount);
+    expect(balanceVaultA.value.uiAmount).to.equal(amountA.toNumber() / Math.pow(10, DECIMALS_MINT_A), "Vault A should have 100 tokens");
+
+    const balanceVaultB = await connection.getTokenAccountBalance(vaultB);
+    console.log("Vault B balance after:", balanceVaultB.value.uiAmount);
+    expect(balanceVaultB.value.uiAmount).to.equal(amountB.toNumber() / Math.pow(10, DECIMALS_MINT_B), "Vault B should have 100 tokens");
   });
 
   it("Swaps tokens!", async () => {

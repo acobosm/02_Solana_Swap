@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{Mint, Token, TokenAccount};
+use anchor_spl::token::{self, Mint, Token, TokenAccount};
 
 declare_id!("EEyf5eniXACGtctsYLEVzu1LHYFPCPdd4ZoFSQ3VsLF6");
 
@@ -27,15 +27,37 @@ pub mod solana_swap_2025 {
         Ok(())
     }
 
-    pub fn set_exchange_rate(ctx: Context<SetExchangeRate>, new_price: u64) -> Result<()> {
-        msg!("Setting exchange rate to: {}", new_price);
-        let market = &mut ctx.accounts.market;
-        market.price = new_price;
+    pub fn set_price(ctx: Context<SetPrice>, price: u64) -> Result<()> {
+        let market: &mut Account<'_, MarketAccount> = &mut ctx.accounts.market;
+        market.price = price;
         Ok(())
     }
 
-    pub fn add_liquidity(_ctx: Context<AddLiquidity>, amount: u64, add_to_a: bool) -> Result<()> {
-        msg!("Adding liquidity: amount={}, add_to_a={}", amount, add_to_a);
+    pub fn add_liquidity(
+        ctx: Context<AddLiquidity>,
+        amount_a: u64,
+        amount_b: u64,
+    ) -> Result<()> {
+        msg!("Adding liquidity: amount_a={}, amount_b={}", amount_a, amount_b);
+
+        // Transfer Token A
+        let cpi_accounts_a = token::Transfer {
+            from: ctx.accounts.autority_token_a.to_account_info(),
+            to: ctx.accounts.vault_a.to_account_info(),
+            authority: ctx.accounts.authority.to_account_info(),
+        };
+        let cpi_ctx_a = CpiContext::new(ctx.accounts.token_program.key(), cpi_accounts_a);
+        token::transfer(cpi_ctx_a, amount_a)?;
+
+        // Transfer Token B
+        let cpi_accounts_b = token::Transfer {
+            from: ctx.accounts.autority_token_b.to_account_info(),
+            to: ctx.accounts.vault_b.to_account_info(),
+            authority: ctx.accounts.authority.to_account_info(),
+        };
+        let cpi_ctx_b = CpiContext::new(ctx.accounts.token_program.key(), cpi_accounts_b);
+        token::transfer(cpi_ctx_b, amount_b)?;
+
         Ok(())
     }
 
@@ -106,42 +128,52 @@ pub struct InitializeMarket<'info> {
 }
 
 #[derive(Accounts)]
-pub struct SetExchangeRate<'info> {
-    #[account(mut)]
-    pub authority: Signer<'info>, // Debe ser la autoridad del market
+pub struct SetPrice<'info> {
+    pub token_mint_a: Account<'info, Mint>,
+    pub token_mint_b: Account<'info, Mint>,
     #[account(
         mut,
         has_one = authority @ MySwapError::Unauthorized, // Verifica que la autoridad firme
-        seeds = [b"market".as_ref(), market.token_mint_a.as_ref(), market.token_mint_b.as_ref()],
+        seeds = [b"market".as_ref(), token_mint_a.key().as_ref(), token_mint_b.key().as_ref()],
         bump,
     )]
     pub market: Account<'info, MarketAccount>,
+    pub authority: Signer<'info>,
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+    pub rent: Sysvar<'info, Rent>,
 }
 
 #[derive(Accounts)]
 pub struct AddLiquidity<'info> {
-    #[account(mut)]
-    pub authority: Signer<'info>, // La autoridad del market que deposita los tokens
-    #[account(mut)]
-    pub source_token_account: Account<'info, TokenAccount>, // Cuenta de token del authority
-    #[account(
-        mut,
-        seeds = [b"market".as_ref(), market.token_mint_a.key().as_ref(), market.token_mint_b.key().as_ref()],
-        bump,
+    pub token_mint_a: Account<'info, Mint>,
+    pub token_mint_b: Account<'info, Mint>,
+    #[account(mut,
+        seeds = [b"market".as_ref(), token_mint_a.key().as_ref(), token_mint_b.key().as_ref()],
+        bump
     )]
     pub market: Account<'info, MarketAccount>,
-    #[account(
-        mut,
+
+    #[account(mut,
         seeds = [b"vault_a".as_ref(), market.key().as_ref()],
         bump,
     )]
     pub vault_a: Account<'info, TokenAccount>,
-    #[account(
-        mut,
+
+    #[account(mut,
         seeds = [b"vault_b".as_ref(), market.key().as_ref()],
         bump,
     )]
     pub vault_b: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub autority_token_a: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub autority_token_b: Account<'info, TokenAccount>,
+
+    pub authority: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
     pub token_program: Program<'info, Token>,
 }
 
