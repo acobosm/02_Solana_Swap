@@ -61,12 +61,99 @@ pub mod solana_swap_2025 {
         Ok(())
     }
 
-    pub fn swap(_ctx: Context<Swap>, amount_in: u64, swap_a_to_b: bool) -> Result<()> {
-        msg!(
-            "Performing swap: amount_in={}, swap_a_to_b={}",
-            amount_in,
-            swap_a_to_b
-        );
+    pub fn swap(ctx: Context<Swap>, amount: u64, a_to_b: bool) -> Result<()> {
+        let market: &mut Account<'_, MarketAccount> = &mut ctx.accounts.market;
+
+        if a_to_b {
+            // Transfer Token A from user to vault A
+            let cpi_accounts = token::Transfer {
+                from: ctx.accounts.user_token_a.to_account_info(),
+                to: ctx.accounts.vault_a.to_account_info(),
+                authority: ctx.accounts.user.to_account_info(),
+            };
+            token::transfer(
+                CpiContext::new(ctx.accounts.token_program.key(), cpi_accounts),
+                amount,
+            )?;
+
+            // Calculate amount_b to send to user
+            const PRICE_DECIMAL_FACTOR: u128 = 10_u128.pow(6);
+            let amount_b: u64 = ((amount as u128)
+                .checked_mul(market.price as u128)
+                .ok_or(MySwapError::CalculationOverflow)?
+                .checked_mul(10_u128.pow(market.decimals_b as u32))
+                .ok_or(MySwapError::CalculationOverflow)?
+                .checked_div(PRICE_DECIMAL_FACTOR)
+                .ok_or(MySwapError::CalculationOverflow)?
+                .checked_div(10_u128.pow(market.decimals_b as u32))
+                .ok_or(MySwapError::CalculationOverflow)?) as u64;
+
+            // Transfer Token B from vault B to user
+            let cpi_account2 = token::Transfer {
+                from: ctx.accounts.vault_b.to_account_info(),
+                to: ctx.accounts.user_token_b.to_account_info(),
+                authority: market.to_account_info(),
+            };
+            let signer_seeds: &[&[&[u8]]] = &[&[
+                b"market",
+                market.token_mint_a.as_ref(),
+                market.token_mint_b.as_ref(),
+                &[market.bump],
+            ]];
+            token::transfer(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.key(),
+                    cpi_account2,
+                    signer_seeds,
+                ),
+                amount_b,
+            )?;
+        } else {
+            // Transfer Token B from user to vault B
+            let cpi_accounts = token::Transfer {
+                from: ctx.accounts.user_token_b.to_account_info(),
+                to: ctx.accounts.vault_b.to_account_info(),
+                authority: ctx.accounts.user.to_account_info(),
+            };
+            token::transfer(
+                CpiContext::new(ctx.accounts.token_program.key(), cpi_accounts),
+                amount,
+            )?;
+
+            // Calculate amount_a to send to user (amount_a = amount_b * PRICE_DECIMAL_FACTOR / price)
+            const PRICE_DECIMAL_FACTOR: u128 = 10_u128.pow(6);
+            let amount_a: u64 = ((amount as u128)
+                .checked_mul(PRICE_DECIMAL_FACTOR)
+                .ok_or(MySwapError::CalculationOverflow)?
+                .checked_mul(10_u128.pow(market.decimals_a as u32))
+                .ok_or(MySwapError::CalculationOverflow)?
+                .checked_div(market.price as u128)
+                .ok_or(MySwapError::CalculationOverflow)?
+                .checked_div(10_u128.pow(market.decimals_a as u32))
+                .ok_or(MySwapError::CalculationOverflow)?) as u64;
+
+            // Transfer Token A from vault A to user
+            let cpi_account2 = token::Transfer {
+                from: ctx.accounts.vault_a.to_account_info(),
+                to: ctx.accounts.user_token_a.to_account_info(),
+                authority: market.to_account_info(),
+            };
+            let signer_seeds: &[&[&[u8]]] = &[&[
+                b"market",
+                market.token_mint_a.as_ref(),
+                market.token_mint_b.as_ref(),
+                &[market.bump],
+            ]];
+            token::transfer(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.key(),
+                    cpi_account2,
+                    signer_seeds,
+                ),
+                amount_a,
+            )?;
+        }
+
         Ok(())
     }
 }
@@ -179,35 +266,43 @@ pub struct AddLiquidity<'info> {
 
 #[derive(Accounts)]
 pub struct Swap<'info> {
-    #[account(mut)]
-    pub user: Signer<'info>, // El usuario que inicia el swap
-    #[account(mut)]
-    pub user_token_a_account: Account<'info, TokenAccount>, // Cuenta de Token A del usuario
-    #[account(mut)]
-    pub user_token_b_account: Account<'info, TokenAccount>, // Cuenta de Token B del usuario
-    #[account(
-        mut,
-        seeds = [b"market".as_ref(), market.token_mint_a.key().as_ref(), market.token_mint_b.key().as_ref()],
-        bump,
+    pub token_mint_a: Account<'info, Mint>,
+    pub token_mint_b: Account<'info, Mint>,
+    #[account(mut,
+        seeds = [b"market".as_ref(), token_mint_a.key().as_ref(), token_mint_b.key().as_ref()],
+        bump
     )]
-    pub market: Account<'info, MarketAccount>, // El market de swap
-    #[account(
-        mut,
+    pub market: Account<'info, MarketAccount>,
+
+    #[account(mut,
         seeds = [b"vault_a".as_ref(), market.key().as_ref()],
         bump,
     )]
     pub vault_a: Account<'info, TokenAccount>,
-    #[account(
-        mut,
+
+    #[account(mut,
         seeds = [b"vault_b".as_ref(), market.key().as_ref()],
         bump,
     )]
     pub vault_b: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub user_token_a: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub user_token_b: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
     pub token_program: Program<'info, Token>,
+    pub rent: Sysvar<'info, Rent>,
 }
 
 #[error_code]
 pub enum MySwapError {
     #[msg("La cuenta provista no está autorizada para realizar esta operación.")]
     Unauthorized,
+    #[msg("Operación aritmética causó desbordamiento.")]
+    CalculationOverflow,
 }

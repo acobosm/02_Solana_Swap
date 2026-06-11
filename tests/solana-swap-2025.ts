@@ -208,7 +208,7 @@ describe("solana-swap-2025", () => {
 
   it("Should set price", async () => {
     const tx = await program.methods
-      .setPrice(new anchor.BN(1000000))
+      .setPrice(new anchor.BN(2500000))
       .accounts({
         market: market,
         tokenMintA: mintA,
@@ -222,7 +222,7 @@ describe("solana-swap-2025", () => {
       .rpc();
 
     const marketAccount = await program.account.marketAccount.fetch(market);
-    expect(marketAccount.price.eq(new anchor.BN(1000000))).to.be.true;
+    expect(marketAccount.price.eq(new anchor.BN(2500000))).to.be.true;
     expect(tx).to.not.be.null;
   });
 
@@ -232,8 +232,8 @@ describe("solana-swap-2025", () => {
     const balanceAuthorityTokenBBefore = await connection.getTokenAccountBalance(initializerTokenBAccount.address);
     console.log("Authority Token A balance before:", balanceAuthorityTokenABefore.value.uiAmount);
     console.log("Authority Token B balance before:", balanceAuthorityTokenBBefore.value.uiAmount);
-    const amountA = new anchor.BN(100 * Math.pow(10, DECIMALS_MINT_A));
-    const amountB = new anchor.BN(100 * Math.pow(10, DECIMALS_MINT_B));
+    const amountA = new anchor.BN(1000 * Math.pow(10, DECIMALS_MINT_A));
+    const amountB = new anchor.BN(1000 * Math.pow(10, DECIMALS_MINT_B));
     const tx = await program.methods.addLiquidity(
       amountA,
       amountB,
@@ -269,21 +269,70 @@ describe("solana-swap-2025", () => {
     expect(balanceVaultB.value.uiAmount).to.equal(amountB.toNumber() / Math.pow(10, DECIMALS_MINT_B), "Vault B should have 100 tokens");
   });
 
-  it("Swaps tokens!", async () => {
-    const tx = await program.methods
-      .swap(new anchor.BN(100_000_000), true) // amountIn: 100, swapAToB: true
-      .accounts({
-        user: user.publicKey,
-        userTokenAAccount: userTokenAAccount.address,
-        userTokenBAccount: userTokenBAccount.address,
-        market: market,
-        vaultA: vaultA,
-        vaultB: vaultB,
-        tokenProgram: TOKEN_PROGRAM_ID,
-      })
-      .signers([user])
-      .rpc();
+  it("Should swap", async () => {
+    const connection = anchor.getProvider().connection;
+    const balanceUserTokenABefore = (await connection.getTokenAccountBalance(userTokenAAccount.address)).value.uiAmount * Math.pow(10, DECIMALS_MINT_A);
+    const balanceUserTokenBBefore = (await connection.getTokenAccountBalance(userTokenBAccount.address)).value.uiAmount * Math.pow(10, DECIMALS_MINT_B);
+    console.log("User Token A balance before:", balanceUserTokenABefore);
+    console.log("User Token B balance before:", balanceUserTokenBBefore);
 
-    console.log("Swap TX:", tx);
+    const amount = new anchor.BN(100 * Math.pow(10, DECIMALS_MINT_A));
+
+    const tx = await program.methods.swap(
+      amount,
+      true,
+    ).accounts({
+      market: market,
+      tokenMintA: mintA,
+      tokenMintB: mintB,
+      vaultA: vaultA,
+      vaultB: vaultB,
+      userTokenA: userTokenAAccount.address,
+      userTokenB: userTokenBAccount.address,
+      user: user.publicKey,
+      tokenProgram: TOKEN_PROGRAM_ID,
+    }).signers([user]).rpc();
+
+    console.log("Swap tx:", tx);
+    expect(tx).to.not.be.null;
+
+    const balanceUserTokenAAfter = (await connection.getTokenAccountBalance(userTokenAAccount.address)).value.uiAmount * Math.pow(10, DECIMALS_MINT_A);
+    const balanceUserTokenBAfter = (await connection.getTokenAccountBalance(userTokenBAccount.address)).value.uiAmount * Math.pow(10, DECIMALS_MINT_B);
+    console.log("User Token A balance after:", balanceUserTokenAAfter);
+    console.log("User Token B balance after:", balanceUserTokenBAfter);
+
+    expect(balanceUserTokenAAfter).to.equal(balanceUserTokenABefore - amount.toNumber(), "User should have 90 tokens after swapping");
+    expect(balanceUserTokenBAfter).to.equal(balanceUserTokenBBefore + amount.toNumber() * 2.5, "User should have 110 tokens after swap...");
+  });
+
+  it("Should swap Token B to A", async () => {
+    const connection = anchor.getProvider().connection;
+    const balanceUserTokenABefore = (await connection.getTokenAccountBalance(userTokenAAccount.address)).value.uiAmount * Math.pow(10, DECIMALS_MINT_A);
+    const balanceUserTokenBBefore = (await connection.getTokenAccountBalance(userTokenBAccount.address)).value.uiAmount * Math.pow(10, DECIMALS_MINT_B);
+
+    const amountIn = new anchor.BN(250 * Math.pow(10, DECIMALS_MINT_B));
+
+    const tx = await program.methods.swap(
+      amountIn,
+      false,
+    ).accounts({
+      market: market,
+      tokenMintA: mintA,
+      tokenMintB: mintB,
+      vaultA: vaultA,
+      vaultB: vaultB,
+      userTokenA: userTokenAAccount.address,
+      userTokenB: userTokenBAccount.address,
+      user: user.publicKey,
+      tokenProgram: TOKEN_PROGRAM_ID,
+    }).signers([user]).rpc();
+
+    expect(tx).to.not.be.null;
+
+    const balanceUserTokenAAfter = (await connection.getTokenAccountBalance(userTokenAAccount.address)).value.uiAmount * Math.pow(10, DECIMALS_MINT_A);
+    const balanceUserTokenBAfter = (await connection.getTokenAccountBalance(userTokenBAccount.address)).value.uiAmount * Math.pow(10, DECIMALS_MINT_B);
+
+    expect(balanceUserTokenAAfter).to.equal(balanceUserTokenABefore + 100 * Math.pow(10, DECIMALS_MINT_A));
+    expect(balanceUserTokenBAfter).to.equal(balanceUserTokenBBefore - amountIn.toNumber());
   });
 });
